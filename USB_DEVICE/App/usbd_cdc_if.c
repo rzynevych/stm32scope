@@ -110,6 +110,8 @@ extern USBD_HandleTypeDef hUsbDeviceFS;
 
 /* USER CODE BEGIN EXPORTED_VARIABLES */
 volatile uint8_t g_usb_ready = 1;
+volatile uint8_t g_usb_data_received = 0;
+uint8_t *g_usb_in_buff = NULL;
 void (*g_cdc_tratsmit_cplt_callback)(void) = NULL;
 /* USER CODE END EXPORTED_VARIABLES */
 
@@ -262,9 +264,15 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 6 */
-  USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
-  USBD_CDC_ReceivePacket(&hUsbDeviceFS);
-  return (USBD_OK);
+
+	if (g_usb_in_buff && !g_usb_data_received) {
+		memcpy(g_usb_in_buff, Buf, *Len);
+		g_usb_data_received = 1;
+	}
+
+	USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
+	USBD_CDC_ReceivePacket(&hUsbDeviceFS);
+	return (USBD_OK);
   /* USER CODE END 6 */
 }
 

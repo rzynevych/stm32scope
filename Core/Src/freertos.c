@@ -97,6 +97,7 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
   /* USER CODE BEGIN RTOS_THREADS */
   main_task_init();
+  usb_in_task_init();
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */

@@ -95,6 +95,8 @@ extern USBD_CDC_ItfTypeDef USBD_Interface_fops_FS;
 
 /* USER CODE BEGIN EXPORTED_VARIABLES */
 extern volatile uint8_t g_usb_ready;
+extern volatile uint8_t g_usb_data_received;
+extern uint8_t *g_usb_in_buff;
 extern void (*g_cdc_tratsmit_cplt_callback)(void);
 /* USER CODE END EXPORTED_VARIABLES */
 
