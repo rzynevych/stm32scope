@@ -20,8 +20,9 @@
 #define DATA_LENGTH_SIZE 2
 #define METADATA_SIZE (SAMPLING_PERIOD_SIZE + DATA_LENGTH_SIZE)
 #define MSG_SAMPLES_COUNT 1000
+#define SAMPLE_SIZE 2
 #define DATA_MSG_HEADER_FULL_SIZE (HEADER_SIZE + MSG_TYPE_SIZE + METADATA_SIZE)
-#define DATA_MSG_SIZE (DATA_MSG_HEADER_FULL_SIZE + MSG_SAMPLES_COUNT)
+#define DATA_MSG_SIZE (DATA_MSG_HEADER_FULL_SIZE + MSG_SAMPLES_COUNT * SAMPLE_SIZE)
 
 #define ADC_BUF_SIZE (MSG_SAMPLES_COUNT * 10)
 
@@ -37,6 +38,7 @@
 #define HEADER_BYTE2 0xBB
 
 #define ADC_MAX_VOLTAGE_MV 3300
+#define ADC_MAX_INT_VAL 4095
 #define AUTO_TRIGGER_PERIOD_MS 100
 
 enum MsgType {
@@ -56,13 +58,13 @@ enum TriggerDirection {
 };
 
 static uint16_t _adc_buf[ADC_BUF_SIZE];
-static uint8_t _samples_buf[ADC_BUF_SIZE];
+static uint16_t _samples_buf[ADC_BUF_SIZE];
 static uint8_t _data_msg_buf[DATA_MSG_SIZE];
 static uint8_t _setting_msg_buf[SETTING_MSG_SIZE];
 static uint8_t _msg_in_buf[MSG_IN_BUFF_SIZE];
 
 static uint32_t _sampling_period = 1000; // in nanoseconds
-static uint16_t _data_length = MSG_SAMPLES_COUNT;
+static uint16_t _data_length = MSG_SAMPLES_COUNT * SAMPLE_SIZE;
 
 static volatile uint8_t _half_lock = 0;
 static volatile uint8_t _full_lock = 0;
@@ -83,15 +85,15 @@ void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc)
 		return;
 	}
 	uint8_t  trigger_ready = 0;
-	uint8_t trigger_val = 255 * (_trigger_val_mv + ADC_MAX_VOLTAGE_MV/2) / ADC_MAX_VOLTAGE_MV;
-	int min_trigger = MSG_SAMPLES_COUNT/2;
+	int16_t trigger_val = ADC_MAX_INT_VAL * (_trigger_val_mv + ADC_MAX_VOLTAGE_MV/2) / ADC_MAX_VOLTAGE_MV;
+	int min_trigger_pos = MSG_SAMPLES_COUNT/2;
 	for (int i = 0; i < ADC_BUF_SIZE / 2; ++i) {
-		uint8_t val = _adc_buf[i];
+		int16_t val = _adc_buf[i];
 		_samples_buf[i] = val;
-		if (i >= min_trigger &&_trigger_direction * val < _trigger_direction * trigger_val) {
+		if (i >= min_trigger_pos &&_trigger_direction * val < _trigger_direction * trigger_val) {
 			trigger_ready = 1;
 		}
-		if (!_trigger_position && trigger_ready && i >= min_trigger
+		if (!_trigger_position && trigger_ready && i >= min_trigger_pos
 				&& _trigger_direction * val >= _trigger_direction * trigger_val) {
 			_trigger_position = i;
 		}
@@ -105,15 +107,15 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 		return;
 	}
 	uint8_t  trigger_ready = 0;
-	uint8_t trigger_val = 255 * (_trigger_val_mv + ADC_MAX_VOLTAGE_MV/2) / ADC_MAX_VOLTAGE_MV;
-	int max_trigger = ADC_BUF_SIZE - MSG_SAMPLES_COUNT/2;
+	int16_t trigger_val = ADC_MAX_INT_VAL * (_trigger_val_mv + ADC_MAX_VOLTAGE_MV/2) / ADC_MAX_VOLTAGE_MV;
+	int max_trigger_pos = ADC_BUF_SIZE - MSG_SAMPLES_COUNT/2;
 	for (int i = ADC_BUF_SIZE / 2; i < ADC_BUF_SIZE; ++i) {
-		uint8_t val = _adc_buf[i];
+		int16_t val = _adc_buf[i];
 		_samples_buf[i] = val;
-		if (i < max_trigger &&_trigger_direction * val < _trigger_direction * trigger_val) {
+		if (i < max_trigger_pos &&_trigger_direction * val < _trigger_direction * trigger_val) {
 			trigger_ready = 1;
 		}
-		if (!_trigger_position && trigger_ready && i < max_trigger
+		if (!_trigger_position && trigger_ready && i < max_trigger_pos
 				&& _trigger_direction * val >= _trigger_direction * trigger_val) {
 			_trigger_position = i;
 		}
@@ -167,7 +169,8 @@ void main_task(void *argument)
 			if (_trigger_mode == TRIGGER_MODE_SINGLE) {
 				_trigger_pause = 1;
 			}
-			memcpy(_data_msg_buf + DATA_MSG_HEADER_FULL_SIZE, _samples_buf + _trigger_position - MSG_SAMPLES_COUNT/2, MSG_SAMPLES_COUNT);
+			memcpy(_data_msg_buf + DATA_MSG_HEADER_FULL_SIZE,
+					_samples_buf + _trigger_position - MSG_SAMPLES_COUNT/2, SAMPLE_SIZE * MSG_SAMPLES_COUNT);
 			_trigger_position = 0;
 			_last_trigger_time = time;
 			send_usb_msg((uint8_t*)_data_msg_buf, DATA_MSG_SIZE);
