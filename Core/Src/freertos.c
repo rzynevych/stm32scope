@@ -23,8 +23,6 @@
 #include "main.h"
 #include "cmsis_os.h"
 
-#include "oscilloscope.h"
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 

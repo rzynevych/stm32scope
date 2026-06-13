@@ -137,7 +137,6 @@ static void search_trigger()
 	}
 	if (dist > 1) {
 		current_subbuff = (current_subbuff + dist - 1) % SUBBUFFER_COUNT;
-		_trigger_search_time++;
 	}
 
 	_trigger_search_start = TIM5->CNT;
@@ -156,9 +155,10 @@ static void search_trigger()
 	}
 	current_subbuff = (current_subbuff + 1) % SUBBUFFER_COUNT;
 
-	if (_trigger_mode == TRIGGER_MODE_AUTO && _current_time - _last_trigger_time > AUTO_TRIGGER_PERIOD_MS) {
+	if (_trigger_position == UINT32_MAX && _trigger_mode == TRIGGER_MODE_AUTO && _current_time - _last_trigger_time > AUTO_TRIGGER_PERIOD_MS) {
 		_trigger_position = _last_written_subbuff * SUBBUFFER_SIZE;
 	}
+	_trigger_search_time = TIM5->CNT - _trigger_search_start;
 }
 
 static void send_data()
