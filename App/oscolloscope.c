@@ -15,13 +15,16 @@
 #include "usbd_cdc_if.h"
 
 #define HEADER_SIZE 2
+#define FOOTER_SIZE 2
 #define MSG_TYPE_SIZE 1
+#define SEQ_SIZE 1
 #define DATA_LENGTH_SIZE 2
-#define METADATA_SIZE (DATA_LENGTH_SIZE)
+#define TRIGGER_SEARCH_TIME_SIZE 4 // for debug
+#define METADATA_SIZE (SEQ_SIZE + DATA_LENGTH_SIZE + TRIGGER_SEARCH_TIME_SIZE)
 #define MSG_SAMPLES_COUNT 1000
 #define SAMPLE_SIZE 2
 #define DATA_MSG_HEADER_FULL_SIZE (HEADER_SIZE + MSG_TYPE_SIZE + METADATA_SIZE)
-#define DATA_MSG_SIZE (DATA_MSG_HEADER_FULL_SIZE + MSG_SAMPLES_COUNT * SAMPLE_SIZE)
+#define DATA_MSG_SIZE (DATA_MSG_HEADER_FULL_SIZE + MSG_SAMPLES_COUNT * SAMPLE_SIZE + FOOTER_SIZE)
 
 #define ADC_BUF_SIZE MSG_SAMPLES_COUNT
 #define SUBBUFFER_SIZE (MSG_SAMPLES_COUNT/2)
@@ -42,11 +45,14 @@
 
 #define HEADER_BYTE1 0xAA
 #define HEADER_BYTE2 0xBB
+#define FOOTER_BYTE1 0xCC
+#define FOOTER_BYTE2 0xDD
 
 #define ADC_MAX_VOLTAGE_MV 3300
 #define ADC_MID_VOLTAGE_MV (ADC_MAX_VOLTAGE_MV/2)
 #define ATTENUATION_FACTOR 0.4
 #define ADC_MAX_INT_VAL 4095
+#define MIN_TRIGGER_PERIOD_MS 20
 #define AUTO_TRIGGER_PERIOD_MS 100
 
 enum MsgType {
@@ -71,21 +77,21 @@ enum TriggerDirection {
 	TRIGGER_DIRECTION_FALLING = -1
 };
 
-enum SRVal {
+enum SampleRateVal {
 	SR_2MSPS,
 	SR_1MSPS,
 	SR_100KSPS,
 	SR_10KSPS
 };
 
-enum SRTimerPeriod {
+enum SampleRateTimerPeriod {
 	SR_PERIOD_2MSPS = 32,
 	SR_PERIOD_1MSPS = 64,
 	SR_PERIOD_100KSPS = 64,
 	SR_PERIOD_10KSPS = 64
 };
 
-enum OVSFactor {
+enum OversamplingFactor {
 	OVS_FACT_2MSPS = 0,
 	OVS_FACT_1MSPS = 0,
 	OVS_FACT_100KSPS = 10,
@@ -94,13 +100,14 @@ enum OVSFactor {
 
 static uint16_t _adc_buf[ADC_BUF_SIZE];
 static uint16_t _samples_buf[SAMPLES_BUFF_SIZE];
-static uint8_t _data_msg_buf[DATA_MSG_SIZE + 4];
+static uint8_t _data_msg_buf[DATA_MSG_SIZE];
 static uint8_t _setting_msg_buf[SETTING_MSG_BUFF_SIZE];
 static uint8_t _msg_in_buf[SETTING_MSG_BUFF_SIZE];
 
+static uint8_t  _data_msg_seq = 0;
+static uint16_t _data_length = MSG_SAMPLES_COUNT * SAMPLE_SIZE;
 static uint32_t _sampling_period_ns = 500; // in nanoseconds
 static uint32_t _oversamp_factor = 0;
-static uint16_t _data_length = MSG_SAMPLES_COUNT * SAMPLE_SIZE;
 
 static volatile uint32_t _samp_buf_pos = 0;
 static volatile uint32_t _last_written_subbuff = 0;
@@ -200,7 +207,11 @@ static void search_trigger()
 	}
 	current_subbuff = (current_subbuff + 1) % SUBBUFFER_COUNT;
 
-	if (_trigger_position == UINT32_MAX && _trigger_mode == TRIGGER_MODE_AUTO && _current_time - _last_trigger_time > AUTO_TRIGGER_PERIOD_MS) {
+	if (_current_time - _last_trigger_time < MIN_TRIGGER_PERIOD_MS) {
+		_trigger_position = UINT32_MAX; // skip trigger to keep trigger period over MIN_TRIGGER_PERIOD_MS
+	}
+
+	if (_trigger_mode == TRIGGER_MODE_AUTO && _trigger_position == UINT32_MAX && _current_time - _last_trigger_time > AUTO_TRIGGER_PERIOD_MS) {
 		_trigger_position = _last_written_subbuff * SUBBUFFER_SIZE;
 	}
 //	_trigger_search_time = TIM5->CNT - _trigger_search_start;
@@ -226,24 +237,23 @@ static void send_data()
 		first_src = _samples_buf + _trigger_position - SUBBUFFER_SIZE;
 		first_len = MSG_SAMPLES_COUNT;
 	}
-	memcpy(_data_msg_buf + DATA_MSG_HEADER_FULL_SIZE, first_src, SAMPLE_SIZE * first_len);
+	memcpy(_data_msg_buf + DATA_MSG_HEADER_FULL_SIZE, first_src, first_len * SAMPLE_SIZE);
 	if (second_src) {
-		memcpy(_data_msg_buf + DATA_MSG_HEADER_FULL_SIZE + first_len * SAMPLE_SIZE, second_src, SAMPLE_SIZE * second_len);
+		memcpy(_data_msg_buf + DATA_MSG_HEADER_FULL_SIZE + first_len * SAMPLE_SIZE, second_src, second_len * SAMPLE_SIZE);
 	}
+
+	_data_msg_buf[HEADER_SIZE + MSG_TYPE_SIZE] = _data_msg_seq;
+	_data_msg_seq++;
+
 	_trigger_search_time = TIM5->CNT - _trigger_search_start;
-	memcpy(_data_msg_buf + DATA_MSG_SIZE, &_trigger_search_time, 4);
+	memcpy(_data_msg_buf + HEADER_SIZE + MSG_TYPE_SIZE + SEQ_SIZE + DATA_LENGTH_SIZE, &_trigger_search_time, TRIGGER_SEARCH_TIME_SIZE);
 	_trigger_position = UINT32_MAX;
 	_last_trigger_time = _current_time;
-	send_usb_msg((uint8_t*)_data_msg_buf, DATA_MSG_SIZE + 4);
+	send_usb_msg((uint8_t*)_data_msg_buf, DATA_MSG_SIZE);
 }
 
 void main_task(void *argument)
 {
-	MX_USB_DEVICE_Init();
-
-	// Callback for buff locks releasing
-//	g_cdc_tratsmit_cplt_callback = cdc_transmit_cplt_callback;
-
 	// Start ADC DMA and timer
 	HAL_ADC_Start_DMA(&hadc1, (uint32_t*)_adc_buf, ADC_BUF_SIZE);
 	HAL_TIM_Base_Start(&htim2);
@@ -252,8 +262,10 @@ void main_task(void *argument)
 	_data_msg_buf[0] = HEADER_BYTE1;
 	_data_msg_buf[1] = HEADER_BYTE2;
 	_data_msg_buf[2] = MSG_TYPE_DATA;
+	_data_msg_buf[DATA_MSG_SIZE - 2] = FOOTER_BYTE1;
+	_data_msg_buf[DATA_MSG_SIZE - 1] = FOOTER_BYTE2;
 
-	uint32_t offset = HEADER_SIZE + MSG_TYPE_SIZE;
+	uint32_t offset = HEADER_SIZE + MSG_TYPE_SIZE + SEQ_SIZE;
 	memcpy(_data_msg_buf + offset, &_data_length, DATA_LENGTH_SIZE);
 
 	osDelay(1000); // wait for USB connection
