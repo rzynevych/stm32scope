@@ -27,7 +27,6 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "oscilloscope.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/

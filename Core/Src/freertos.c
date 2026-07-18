@@ -26,7 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-#include "oscilloscope.h"
+#include "oscilloscope_tasks.h"
 
 /* USER CODE END Includes */
 
