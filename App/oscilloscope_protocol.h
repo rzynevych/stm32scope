@@ -48,8 +48,12 @@
 #define ADC_MID_VOLTAGE_MV (ADC_MAX_VOLTAGE_MV/2)
 #define ATTENUATION_FACTOR 0.4
 #define ADC_MAX_INT_VAL 4095
+#define TRG_HYST 10
+#define TRG_NPOS UINT32_MAX
 #define MIN_TRIGGER_PERIOD_MS 20
 #define AUTO_TRIGGER_PERIOD_MS 100
+
+#define USB_CONNECT_DELAY_MS 1000
 
 enum MsgType {
 	MSG_TYPE_DATA,
@@ -59,7 +63,8 @@ enum MsgType {
 
 enum CmdType {
 	CMD_TYPE_TRIGGER,
-	CMD_TYPE_SAMP_RATE
+	CMD_TYPE_SAMP_RATE,
+	CMD_TYPE_DISCONNECT
 };
 
 enum TriggerMode {
@@ -105,8 +110,14 @@ typedef struct {
 	uint8_t  trigger_mode;
 	int8_t   trigger_direction;
 	int16_t  trigger_val_mv;
-	uint8_t  trigger_pause;
+} TriggerSettings;
+
+typedef struct {
 	uint32_t trigger_position;
-} TriggerState;
+	uint32_t last_trigger_time;
+	uint32_t trigger_search_start;
+	uint32_t trigger_search_time;
+	uint8_t  trigger_pause;
+} TriggerSearchState;
 
 #endif /* OSCILLOSCOPE_PROTOCOL_H_ */
