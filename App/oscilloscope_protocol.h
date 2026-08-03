@@ -1,8 +1,8 @@
 /*
  * oscilloscope_protocol.h
  *
- *  Created on: 19 июл. 2026 г.
- *      Author: rusla
+ *  Created on: 19 Jul 2026
+ *      Author: Ruslan Zynevych
  */
 
 #ifndef OSCILLOSCOPE_PROTOCOL_H_
