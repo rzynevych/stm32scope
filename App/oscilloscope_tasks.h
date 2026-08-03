@@ -1,8 +1,8 @@
 /*
  * oscilloscope.h
  *
- *  Created on: 9 мая 2026 г.
- *      Author: rusla
+ *  Created on: 9 May 2026
+ *      Author: Ruslan Zynevych
  */
 
 #ifndef OSCILLOSCOPE_TASKS_H_
