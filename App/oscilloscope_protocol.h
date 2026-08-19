@@ -27,7 +27,9 @@
 #define SUBBUFFER_COUNT 4
 #define SAMPLES_BUFF_SIZE (SUBBUFFER_SIZE * SUBBUFFER_COUNT)
 
+#define CMD_LEN_SIZE 1
 #define CMD_TYPE_SIZE 1
+#define CMD_START_POS (HEADER_SIZE + CMD_LEN_SIZE + CMD_TYPE_SIZE)
 #define SAMPLING_PERIOD_SIZE 4
 #define TRIGGER_MODE_SIZE 1
 #define TRIGGER_VAL_SIZE 2
@@ -54,6 +56,7 @@
 #define AUTO_TRIGGER_PERIOD_MS 100
 
 #define USB_CONNECT_DELAY_MS 1000
+#define LED_BLINK_PERIOD_MS 100
 
 enum MsgType {
 	MSG_TYPE_DATA,
@@ -107,17 +110,17 @@ typedef struct {
 } OscilloscopeState;
 
 typedef struct {
-	uint8_t  trigger_mode;
-	int8_t   trigger_direction;
-	int16_t  trigger_val_mv;
+	uint8_t  mode;
+	int8_t   direction;
+	int16_t  val_mv;
 } TriggerSettings;
 
 typedef struct {
-	uint32_t trigger_position;
-	uint32_t last_trigger_time;
-	uint32_t trigger_search_start;
-	uint32_t trigger_search_time;
-	uint8_t  trigger_pause;
+	uint32_t last_trg_time;
+	uint32_t position;
+	uint32_t search_start_ms;
+	uint32_t search_time_ms;
+	uint8_t  pause;
 } TriggerSearchState;
 
 #endif /* OSCILLOSCOPE_PROTOCOL_H_ */
