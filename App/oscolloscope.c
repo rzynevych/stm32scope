@@ -278,15 +278,19 @@ static void handle_set_samp_rate()
 	default:
 		return;
 	}
+
+	HAL_TIM_Base_Stop(&htim2);
+
+	taskENTER_CRITICAL();
 	_ring_buf_pos = 0;
+	_osc_state.oversamp_factor = oversamp_fact;
+	_osc_state.sampling_period_ns = sampling_period_ns;
+	taskEXIT_CRITICAL();
 
 	__HAL_TIM_SET_COUNTER(&htim2, 0);
 	__HAL_TIM_SET_AUTORELOAD(&htim2, adc_timer_period - 1);
 
-	taskENTER_CRITICAL();
-	_osc_state.oversamp_factor = oversamp_fact;
-	_osc_state.sampling_period_ns = sampling_period_ns;
-	taskEXIT_CRITICAL();
+	HAL_TIM_Base_Start(&htim2);
 
 	offset = HEADER_SIZE;
 	_setting_msg_buf[offset] = MSG_TYPE_SAMP_RATE;
