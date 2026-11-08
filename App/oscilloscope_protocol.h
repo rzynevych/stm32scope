@@ -25,7 +25,7 @@
 #define ADC_BUF_SIZE MSG_SAMPLES_COUNT
 #define SUBBUFFER_SIZE (MSG_SAMPLES_COUNT/2)
 #define SUBBUFFER_COUNT 4
-#define SAMPLES_BUFF_SIZE (SUBBUFFER_SIZE * SUBBUFFER_COUNT)
+#define RING_BUFF_SIZE (SUBBUFFER_SIZE * SUBBUFFER_COUNT)
 
 #define CMD_LEN_SIZE 1
 #define CMD_TYPE_SIZE 1
@@ -55,6 +55,7 @@
 #define MIN_TRIGGER_PERIOD_MS 20
 #define AUTO_TRIGGER_PERIOD_MS 100
 
+#define SUBBUFER_WAIT_MAX_DELAY_MS 10
 #define USB_CONNECT_DELAY_MS 1000
 #define LED_BLINK_PERIOD_MS 100
 
@@ -116,8 +117,9 @@ typedef struct {
 } TriggerSettings;
 
 typedef struct {
-	uint32_t last_trg_time;
+	uint32_t current_subbuff;
 	uint32_t position;
+	uint32_t last_trg_time;
 	uint32_t search_start_ms;
 	uint32_t search_time_ms;
 	uint8_t  pause;

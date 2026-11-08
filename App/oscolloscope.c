@@ -15,7 +15,7 @@
 #include "usbd_cdc_if.h"
 
 static uint16_t _adc_buf[ADC_BUF_SIZE];
-static uint16_t _samples_buf[SAMPLES_BUFF_SIZE];
+static uint16_t _ring_buf[RING_BUFF_SIZE];
 static uint8_t _data_msg_buf[DATA_MSG_SIZE];
 static uint8_t _setting_msg_buf[SETTING_MSG_BUFF_SIZE];
 static uint8_t _msg_in_buf[SETTING_MSG_BUFF_SIZE];
@@ -24,7 +24,7 @@ static OscilloscopeState _osc_state = {.data_length = MSG_SAMPLES_COUNT * SAMPLE
 static TriggerSettings _trg_settings = {.mode = TRIGGER_MODE_AUTO, .direction = TRIGGER_DIRECTION_RISING};
 static TriggerSearchState _trg_srch_state = {0};
 
-static volatile uint32_t _samp_buf_pos = 0;
+static volatile uint32_t _ring_buf_pos = 0;
 static volatile uint32_t _last_written_subbuff = 0;
 
 static uint32_t _current_time = 0;
@@ -35,26 +35,30 @@ static osThreadId_t _usb_in_task_handle;
 
 static void copy_samples(uint16_t *src)
 {
+	if (_trg_srch_state.position != TRG_NPOS) {
+		return;
+	}
+
 	BaseType_t higherPriorityTaskWoken = pdFALSE;
 	if (_osc_state.oversamp_factor == 0) {
-		_samp_buf_pos = (_samp_buf_pos + SUBBUFFER_SIZE) % SAMPLES_BUFF_SIZE;
-		memcpy(_samples_buf + _samp_buf_pos, src, SUBBUFFER_SIZE * sizeof(uint16_t));
-		_last_written_subbuff = _samp_buf_pos / SUBBUFFER_SIZE;
+		_ring_buf_pos = (_ring_buf_pos + SUBBUFFER_SIZE) % RING_BUFF_SIZE;
+		memcpy(_ring_buf + _ring_buf_pos, src, SUBBUFFER_SIZE * sizeof(uint16_t));
+		_last_written_subbuff = _ring_buf_pos / SUBBUFFER_SIZE;
 		vTaskNotifyGiveFromISR(_main_task_handle, &higherPriorityTaskWoken);
 	} else {
 		uint32_t sum = 0;
 		int i = 0;
 		for (; i < SUBBUFFER_SIZE; ++i) {
 			if (i != 0 && i % _osc_state.oversamp_factor == 0) {
-				_samples_buf[_samp_buf_pos + i / _osc_state.oversamp_factor - 1] = sum / _osc_state.oversamp_factor;
+				_ring_buf[_ring_buf_pos + i / _osc_state.oversamp_factor - 1] = sum / _osc_state.oversamp_factor;
 				sum = 0;
 			}
 			sum += src[i];
 		}
-		_samples_buf[_samp_buf_pos + i / _osc_state.oversamp_factor - 1] = sum / _osc_state.oversamp_factor;
-		_samp_buf_pos = (_samp_buf_pos + SUBBUFFER_SIZE / _osc_state.oversamp_factor) % SAMPLES_BUFF_SIZE;
-		if (_samp_buf_pos % SUBBUFFER_SIZE == 0) {
-			_last_written_subbuff = (SUBBUFFER_COUNT + _samp_buf_pos / SUBBUFFER_SIZE - 1) % SUBBUFFER_COUNT;
+		_ring_buf[_ring_buf_pos + i / _osc_state.oversamp_factor - 1] = sum / _osc_state.oversamp_factor;
+		_ring_buf_pos = (_ring_buf_pos + SUBBUFFER_SIZE / _osc_state.oversamp_factor) % RING_BUFF_SIZE;
+		if (_ring_buf_pos % SUBBUFFER_SIZE == 0) {
+			_last_written_subbuff = (SUBBUFFER_COUNT + _ring_buf_pos / SUBBUFFER_SIZE - 1) % SUBBUFFER_COUNT;
 			vTaskNotifyGiveFromISR(_main_task_handle, &higherPriorityTaskWoken);
 		}
 	}
@@ -82,6 +86,7 @@ uint8_t send_usb_msg(uint8_t* buf, uint16_t len)
 	return ret;
 }
 
+// Calculate distance between subbuffers
 static inline uint32_t subbuff_distance(uint32_t front, uint32_t back)
 {
 	int32_t dist = front - back;
@@ -97,13 +102,18 @@ static void search_trigger()
 		return;
 	}
 
-	static uint32_t current_subbuff = 0;
-	uint32_t dist = subbuff_distance(_last_written_subbuff, current_subbuff);
+	// skip trigger to keep trigger period over MIN_TRIGGER_PERIOD_MS
+	if (_current_time - _trg_srch_state.last_trg_time < MIN_TRIGGER_PERIOD_MS) {
+		return;
+	}
+
+	// Calculate distance from current_subbuff to last_written_subbuff
+	uint32_t dist = subbuff_distance(_last_written_subbuff, _trg_srch_state.current_subbuff);
 	if (dist == 0) {
 		return;
 	}
 	if (dist > 1) {
-		current_subbuff = (current_subbuff + dist - 1) % SUBBUFFER_COUNT;
+		_trg_srch_state.current_subbuff = (_trg_srch_state.current_subbuff + dist - 1) % SUBBUFFER_COUNT;
 	}
 
 	_trg_srch_state.search_start_ms = TIM5->CNT;
@@ -115,8 +125,8 @@ static void search_trigger()
 
 	uint8_t  trigger_ready = 0;
 	int16_t trigger_int_val = (int32_t)trigger.direction * ADC_MAX_INT_VAL * (ADC_MID_VOLTAGE_MV + trigger.val_mv)/ADC_MAX_VOLTAGE_MV;
-	for (int i = current_subbuff * SUBBUFFER_SIZE; i < (current_subbuff + 1) * SUBBUFFER_SIZE; ++i) {
-		int16_t val = trigger.direction * _samples_buf[i];
+	for (int i = _trg_srch_state.current_subbuff * SUBBUFFER_SIZE; i < (_trg_srch_state.current_subbuff + 1) * SUBBUFFER_SIZE; ++i) {
+		int16_t val = trigger.direction * _ring_buf[i];
 		if (val < trigger_int_val - TRG_HYST) {
 			trigger_ready = 1;
 		}
@@ -125,16 +135,12 @@ static void search_trigger()
 			break;
 		}
 	}
-	current_subbuff = (current_subbuff + 1) % SUBBUFFER_COUNT;
-
-	if (_current_time - _trg_srch_state.last_trg_time < MIN_TRIGGER_PERIOD_MS) {
-		_trg_srch_state.position = TRG_NPOS; // skip trigger to keep trigger period over MIN_TRIGGER_PERIOD_MS
-	}
+	_trg_srch_state.current_subbuff = (_trg_srch_state.current_subbuff + 1) % SUBBUFFER_COUNT;
+	_trg_srch_state.search_time_ms += TIM5->CNT - _trg_srch_state.search_start_ms;
 
 	if (trigger.mode == TRIGGER_MODE_AUTO && _trg_srch_state.position == TRG_NPOS && _current_time - _trg_srch_state.last_trg_time > AUTO_TRIGGER_PERIOD_MS) {
 		_trg_srch_state.position = _last_written_subbuff * SUBBUFFER_SIZE;
 	}
-//	_trg_srch_state.trigger_search_time = TIM5->CNT - _trg_srch_state.trigger_search_start;
 }
 
 static void send_data()
@@ -145,16 +151,16 @@ static void send_data()
 	uint32_t second_len = 0;
 	if (_trg_srch_state.position < SUBBUFFER_SIZE) {
 		first_len = SUBBUFFER_SIZE - _trg_srch_state.position;
-		first_src = _samples_buf + SAMPLES_BUFF_SIZE - first_len;
+		first_src = _ring_buf + RING_BUFF_SIZE - first_len;
 		second_len = MSG_SAMPLES_COUNT - first_len;
-		second_src = _samples_buf;
+		second_src = _ring_buf;
 	} else if (_trg_srch_state.position > (SUBBUFFER_COUNT - 1) * SUBBUFFER_SIZE) {
-		first_len = SAMPLES_BUFF_SIZE - (_trg_srch_state.position - SUBBUFFER_SIZE);
-		first_src = _samples_buf + _trg_srch_state.position - SUBBUFFER_SIZE;
+		first_len = RING_BUFF_SIZE - (_trg_srch_state.position - SUBBUFFER_SIZE);
+		first_src = _ring_buf + _trg_srch_state.position - SUBBUFFER_SIZE;
 		second_len = MSG_SAMPLES_COUNT - first_len;
-		second_src = _samples_buf;
+		second_src = _ring_buf;
 	} else {
-		first_src = _samples_buf + _trg_srch_state.position - SUBBUFFER_SIZE;
+		first_src = _ring_buf + _trg_srch_state.position - SUBBUFFER_SIZE;
 		first_len = MSG_SAMPLES_COUNT;
 	}
 	memcpy(_data_msg_buf + DATA_MSG_HEADER_FULL_SIZE, first_src, first_len * SAMPLE_SIZE);
@@ -165,7 +171,7 @@ static void send_data()
 	_data_msg_buf[HEADER_SIZE + MSG_TYPE_SIZE] = _osc_state.data_msg_seq;
 	_osc_state.data_msg_seq++;
 
-	_trg_srch_state.search_time_ms = TIM5->CNT - _trg_srch_state.search_start_ms;
+//	_trg_srch_state.search_time_ms = TIM5->CNT - _trg_srch_state.search_start_ms;
 	memcpy(_data_msg_buf + HEADER_SIZE + MSG_TYPE_SIZE + SEQ_SIZE + DATA_LENGTH_SIZE, &_trg_srch_state.search_time_ms, TRIGGER_SEARCH_TIME_SIZE);
 	_trg_srch_state.position = TRG_NPOS;
 	_trg_srch_state.last_trg_time = _current_time;
@@ -185,6 +191,8 @@ void main_task(void *argument)
 	_data_msg_buf[DATA_MSG_SIZE - 2] = FOOTER_BYTE1;
 	_data_msg_buf[DATA_MSG_SIZE - 1] = FOOTER_BYTE2;
 
+	_trg_srch_state.position = TRG_NPOS;
+
 	uint32_t offset = HEADER_SIZE + MSG_TYPE_SIZE + SEQ_SIZE;
 	memcpy(_data_msg_buf + offset, &_osc_state.data_length, DATA_LENGTH_SIZE);
 
@@ -195,7 +203,7 @@ void main_task(void *argument)
 	{
 		_current_time = HAL_GetTick();
 
-		ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // wait for next subbuffer
+		ulTaskNotifyTake(pdTRUE, SUBBUFER_WAIT_MAX_DELAY_MS); // wait for next subbuffer
 		search_trigger();
 		if (_trg_srch_state.position != TRG_NPOS && _usb_connected) {
 			if (_trg_settings.mode == TRIGGER_MODE_SINGLE) {
@@ -270,7 +278,7 @@ static void handle_set_samp_rate()
 	default:
 		return;
 	}
-	_samp_buf_pos = 0;
+	_ring_buf_pos = 0;
 
 	__HAL_TIM_SET_COUNTER(&htim2, 0);
 	__HAL_TIM_SET_AUTORELOAD(&htim2, adc_timer_period - 1);
